@@ -1,0 +1,112 @@
+const express = require('express');
+const session = require('express-session');
+const passport = require('passport');
+const DiscordStrategy = require('passport-discord').Strategy;
+const SteamStrategy = require('passport-steam').Strategy;
+const sqlite3 = require('sqlite3').verbose();
+
+const app = express();
+
+// --- إعداد قاعدة البيانات ---
+const db = new sqlite3.Database('./database.sqlite', (err) => {
+    if (err) console.error(err.message);
+    console.log('Connected to SQLite database.');
+});
+
+// إنشاء جدول ربط الحسابات
+db.run(`CREATE TABLE IF NOT EXISTS users (
+    discord_id TEXT PRIMARY KEY,
+    discord_username TEXT,
+    steam_id TEXT
+)`);
+
+// --- إعداد الـ Session ---
+app.use(session({
+    secret: 'secret_key_ac_server',
+    resave: false,
+    saveUninitialized: false
+}));
+
+app.use(passport.initialize());
+app.use(passport.session());
+
+passport.serializeUser((user, done) => done(null, user));
+passport.deserializeUser((obj, done) => done(null, obj));
+
+// --- إعدادات الحسابات (حط معلوماتك هنا) ---
+const DISCORD_CLIENT_ID = 'YOUR_DISCORD_CLIENT_ID';
+const DISCORD_CLIENT_SECRET = 'YOUR_DISCORD_CLIENT_SECRET';
+const STEAM_API_KEY = 'YOUR_STEAM_API_KEY';
+const DOMAIN = 'http://localhost:3000'; // غيّره برابط موقعك إذا كان عندك سيرفر أونلاين
+
+// --- Discord Strategy ---
+passport.use(new DiscordStrategy({
+    clientID: DISCORD_CLIENT_ID,
+    clientSecret: DISCORD_CLIENT_SECRET,
+    callbackURL: `${DOMAIN}/auth/discord/callback`,
+    scope: ['identify']
+}, (accessToken, refreshToken, profile, done) => {
+    return done(null, { discord: profile });
+}));
+
+// --- Steam Strategy ---
+passport.use(new SteamStrategy({
+    returnURL: `${DOMAIN}/auth/steam/return`,
+    realm: `${DOMAIN}/`,
+    apiKey: STEAM_API_KEY
+}, (identifier, profile, done) => {
+    return done(null, { steam: profile });
+}));
+
+// --- المسارات (Routes) ---
+
+// الصفحة الرئيسية
+app.get('/', (req, res) => {
+    res.send('<h1>مرحباً بك في موقع التفعيل لسيرفر Assetto Corsa</h1><a href="/auth/discord"><button>تسجيل الدخول بـ Discord للتفعيل</button></a>');
+});
+
+// 1. بداية التسجيل بـ Discord
+app.get('/auth/discord', passport.authenticate('discord'));
+
+app.get('/auth/discord/callback', 
+    passport.authenticate('discord', { failureRedirect: '/' }),
+    (req, res) => {
+        req.session.discordUser = req.user.discord;
+        res.redirect('/auth/steam'); // بعد نجاح الديسكورد نحولوه لـ Steam
+    }
+);
+
+// 2. بداية التسجيل بـ Steam
+app.get('/auth/steam', (req, res, next) => {
+    if (!req.session.discordUser) return res.redirect('/auth/discord');
+    next();
+}, passport.authenticate('steam'));
+
+app.get('/auth/steam/return',
+    passport.authenticate('steam', { failureRedirect: '/' }),
+    (req, res) => {
+        const discordUser = req.session.discordUser;
+        const steamId = req.user.steam.id; // SteamID64
+
+        // حفظ البيانات في قاعدة البيانات
+        const stmt = db.prepare(`INSERT OR REPLACE INTO users (discord_id, discord_username, steam_id) VALUES (?, ?, ?)`);
+        stmt.run(discordUser.id, discordUser.username, steamId, (err) => {
+            if (err) {
+                console.error(err);
+                return res.send('حدث خطأ أثناء حفظ البيانات.');
+            }
+            res.send(`
+                <h2>تم التفعيل بنجاح!</h2>
+                <p><b>Discord:</b> ${discordUser.username}</p>
+                <p><b>SteamID64:</b> ${steamId}</p>
+                <p>يمكنك الآن دخول سيرفر Assetto Corsa.</p>
+            `);
+        });
+        stmt.finalize();
+    }
+);
+
+// تشغيل السيرفر
+app.listen(3000, () => {
+    console.log('Server is running on http://localhost:3000');
+});
