@@ -1,1 +1,1 @@
-# npm install express passport passport-discord passport-steam express-session
+npm install express passport passport-discord passport-steam express-session
