@@ -1,1 +1,1 @@
-# picssu-pr
+# npm install express passport passport-discord passport-steam express-session
